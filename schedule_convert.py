@@ -7,7 +7,7 @@ import json
 import re
 from typing import Dict, List, Any
 
-from crew_mapping import W2W_TO_EN, POSITION_TO_EQUIPMENT
+from crew_mapping import W2W_TO_EN, Always_ON_SHIFT, Ignored_Positions, POSITION_AND_CATEGORY_TO_EQUIPMENT
 from config import W2W_TOKEN, EN_TOKEN
 
 TZ = ZoneInfo("America/Chicago")
@@ -26,7 +26,7 @@ def normalize_local_datetime(
     mmddyyyy: str,
     clock_text: str,
     tz: ZoneInfo = TZ
-) -> str:
+    ) -> str:
     """
     Inputs like:
       mmddyyyy = "10/30/2025"
@@ -68,7 +68,7 @@ def fetch_w2w_assigned_shifts(
     start_date_mmddyyyy: str,
     end_date_mmddyyyy: str,
     w2w_token: str = W2W_TOKEN
-) -> List[Dict[str, Any]]:
+    ) -> List[Dict[str, Any]]:
     """
     Calls W2W AssignedShiftList.
     Accepts date strings in MM/DD/YYYY.
@@ -124,8 +124,12 @@ class CrewEquipment:
 def _to_en_user_id(w2w_employee_id: str) -> int | str | None:
     return W2W_TO_EN.get(str(w2w_employee_id))
 
-def _to_equipment_call_sign(position_id: str) -> str | None:
-    return POSITION_TO_EQUIPMENT.get(str(position_id))
+def _to_equipment_call_sign(position_id: str, category_id: str) -> str | None:
+    position_id = str(position_id).strip()
+    category_id = str(category_id).strip()
+    if position_id in Ignored_Positions:
+        return None
+    return POSITION_AND_CATEGORY_TO_EQUIPMENT.get((position_id, category_id))
 
 def _clip_interval(
     start_dt: datetime,
@@ -161,6 +165,9 @@ def make_window_6pm_to_6am(anchor: date, tz: ZoneInfo = TZ) -> tuple[datetime, d
     end = datetime.combine(anchor + timedelta(days=1), time(6, 0)).replace(tzinfo=tz)
     return start, end
 
+def check_user_assigned(users: list[CrewUser], en_id: int | str) -> bool:
+    return any(user.id == en_id for user in users)
+
 def build_en_schedule_payload_for_window(
     shifts: List[Dict[str, Any]],
     window_start: datetime,
@@ -174,11 +181,26 @@ def build_en_schedule_payload_for_window(
     # equipment_call_sign -> list[ CrewUser ]
     equipment_assignments: Dict[str, List[CrewUser]] = {}
 
+    for call_sign, en_ids in Always_ON_SHIFT.items():
+        for en_id in en_ids:
+            users = equipment_assignments.get(call_sign, [])
+            if check_user_assigned(users, en_id):
+                continue
+
+            user_rec = CrewUser(
+                id=en_id,
+                start=window_start.isoformat(),
+                end=window_end.isoformat(),
+                notes="null",
+            )
+            equipment_assignments.setdefault(call_sign, []).append(user_rec)
+
     for s in shifts:
         # Expected W2W fields in each shift item
         # Keys often present: W2W_EMPLOYEE_ID, START_DATE, START_TIME, END_DATE, END_TIME, POSITION_ID
         w2w_emp_id = str(s.get("W2W_EMPLOYEE_ID") or "").strip()
         pos_id = str(s.get("POSITION_ID") or "").strip()
+        cat_id = str(s.get("CATEGORY_ID") or "").strip()
         start_date = str(s.get("START_DATE") or "").strip()
         start_time = str(s.get("START_TIME") or "").strip()
         end_date = str(s.get("END_DATE") or "").strip()
@@ -191,8 +213,9 @@ def build_en_schedule_payload_for_window(
         if en_id is None or str(en_id) == "9999999":
             continue  # user not mapped
 
-        call_sign = _to_equipment_call_sign(pos_id)
+        call_sign = _to_equipment_call_sign(pos_id, cat_id)
         if call_sign is None:
+            print(f"Position {pos_id} with category {cat_id} not mapped to equipment")
             continue  # position not mapped to equipment
 
         # Build localized datetimes
