@@ -74,6 +74,7 @@ def fetch_w2w_assigned_shifts(
     Accepts date strings in MM/DD/YYYY.
     Returns the 'AssignedShiftList' as a list of dicts.
     """
+    print(f"Fetching shifts from W2W from {start_date_mmddyyyy} to {end_date_mmddyyyy}")
     # W2W accepts start_date and end_date as M/D/YYYY or MM/DD/YYYY
     # Build URL per user's pattern. W2W supports key in query or Authorization header.
     url = (
@@ -97,10 +98,13 @@ def fetch_w2w_assigned_shifts(
 
     # Common shape: {"AssignedShiftList":[ {...}, ... ]}
     if isinstance(data, dict) and "AssignedShiftList" in data:
+        print("Successfully fetched shifts from W2W")
         return data["AssignedShiftList"] or []
     # Some tenants return the array directly
     if isinstance(data, list):
+        print("Successfully fetched shifts from W2W as a list")
         return data
+    print(f"Unexpected W2W payload shape: {type(data)}")
     raise RuntimeError(f"Unexpected W2W payload shape: {type(data)}")
 
 
@@ -182,6 +186,7 @@ def build_en_schedule_payload_for_window(
     equipment_assignments: Dict[str, List[CrewUser]] = {}
 
     for call_sign, en_ids in Always_ON_SHIFT.items():
+        print(f"Adding shift for {call_sign} with {en_ids}")
         for en_id in en_ids:
             users = equipment_assignments.get(call_sign, [])
             if check_user_assigned(users, en_id):
@@ -206,6 +211,9 @@ def build_en_schedule_payload_for_window(
         end_date = str(s.get("END_DATE") or "").strip()
         end_time = str(s.get("END_TIME") or "").strip()
 
+        if pos_id in Ignored_Positions:
+            continue  # position is ignored
+        
         if not (w2w_emp_id and pos_id and start_date and start_time and end_date and end_time):
             continue  # skip incomplete rows
 
@@ -215,7 +223,7 @@ def build_en_schedule_payload_for_window(
 
         call_sign = _to_equipment_call_sign(pos_id, cat_id)
         if call_sign is None:
-            print(f"Position {pos_id} with category {cat_id} not mapped to equipment")
+            print(f"Position {pos_id} with category {cat_id} that is assigned to {w2w_emp_id} not mapped to equipment")
             continue  # position not mapped to equipment
 
         # Build localized datetimes
@@ -328,8 +336,10 @@ def build_the_schedule():
 
     # choose which window to build based on current time
     if now.hour < 12:
+        print("Building 6am to 6pm window")
         window_start, window_end = make_window_6am_to_6pm(anchor)
     else:
+        print("Building 6pm to 6am window")
         window_start, window_end = make_window_6pm_to_6am(anchor)
 
     # Pull a wider range to ensure we catch overnight shifts
@@ -346,12 +356,6 @@ def build_the_schedule():
 
     result = post_en_schedule(payload)
     return {"posted": True, "result": result, "payload": payload}
-
-
-
-
-
-# In[3]:
 
 
 if __name__ == "__main__":
