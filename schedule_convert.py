@@ -1,12 +1,12 @@
 from __future__ import annotations
-from dataclasses import dataclass
-from datetime import datetime, date, time, timedelta
-from zoneinfo import ZoneInfo
 import requests
 import json
 import re
+import argparse
 from typing import Dict, List, Any
-
+from dataclasses import dataclass
+from datetime import datetime, date, time, timedelta
+from zoneinfo import ZoneInfo
 from crew_mapping import W2W_TO_EN, Always_ON_SHIFT, Ignored_Positions, POSITION_AND_CATEGORY_TO_EQUIPMENT
 from config import W2W_TOKEN, EN_TOKEN
 
@@ -14,6 +14,28 @@ TZ = ZoneInfo("America/Chicago")
 
 Four_Hour_Window = (2, 6, 10, 14, 18, 22)
 
+def parse_manual_window(tz):
+    parser = argparse.ArgumentParser(description="Build crew schedule")
+
+    parser.add_argument("start_date", nargs="?", help="MM/DD/YYYY")
+    parser.add_argument("start_time", nargs="?", help="HH:MM")
+    parser.add_argument("end_date", nargs="?", help="MM/DD/YYYY")
+    parser.add_argument("end_time", nargs="?", help="HH:MM")
+
+    args = parser.parse_args()
+
+    if not all([args.start_date, args.start_time, args.end_date, args.end_time]):
+        return None
+
+    start = datetime.strptime(
+        f"{args.start_date} {args.start_time}", "%m/%d/%Y %H:%M"
+    ).replace(tzinfo=tz)
+
+    end = datetime.strptime(
+        f"{args.end_date} {args.end_time}", "%m/%d/%Y %H:%M"
+    ).replace(tzinfo=tz)
+
+    return start, end 
 
 # =========================
 # 1) Normalize local date+time to ISO-8601 with offset
@@ -361,15 +383,18 @@ def build_the_schedule():
       3) generate EN JSON for the 6am→6am window anchored at anchor_mmddyyyy
       4) POST to EN
     """
-    #anchor = datetime.strptime(anchor_mmddyyyy, "%m/%d/%Y").date()
-    #now = datetime.now(TZ)
 
     now = datetime.now(TZ)
     anchor = now.date()
+    manual_window = parse_manual_window(TZ)
 
     # choose which window to build based on current time
-    window_start, window_end = make_next_4h_window(now, TZ)
-    print(f"Building 4-hour window: {window_start.isoformat()} to {window_end.isoformat()}")
+    if manual_window:
+        window_start, window_end = manual_window
+        print(f"Building manual window: {window_start.isoformat()} to {window_end.isoformat()}")
+    else:
+        window_start, window_end = make_next_4h_window(now, TZ)
+        print(f"Building 4-hour window: {window_start.isoformat()} to {window_end.isoformat()}")
 
     # Pull a wider range to ensure we catch overnight shifts
     fetch_start = (window_start - timedelta(hours=12)).strftime("%m/%d/%Y")
