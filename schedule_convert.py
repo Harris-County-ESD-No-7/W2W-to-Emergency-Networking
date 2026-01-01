@@ -12,7 +12,7 @@ from config import W2W_TOKEN, EN_TOKEN
 
 TZ = ZoneInfo("America/Chicago")
 
-
+Four_Hour_Window = (2, 6, 10, 14, 18, 22)
 
 
 # =========================
@@ -150,6 +150,39 @@ def _clip_interval(
     if s >= e:
         return None
     return s, e
+
+def make_next_4h_window(now: datetime, tz=TZ) -> tuple[datetime, datetime]:
+    """
+    Return the next 4-hour window aligned to:
+    02:00, 06:00, 10:00, 14:00, 18:00, 22:00 local time.
+
+    Examples with your timer:
+      01:55 -> 02:00-06:00
+      05:55 -> 06:00-10:00
+      09:55 -> 10:00-14:00
+      13:55 -> 14:00-18:00
+      17:55 -> 18:00-22:00
+      21:55 -> 22:00-02:00(next day)
+    """
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=tz)
+
+    today = now.date()
+
+    # build candidate starts for today
+    candidates = [
+        datetime.combine(today, time(h, 0)).replace(tzinfo=tz)
+        for h in Four_Hour_Window
+    ]
+
+    # pick the first candidate start strictly after "now"
+    for start in candidates:
+        if start > now:
+            return start, start + timedelta(hours=4)
+
+    # if none left today, next start is tomorrow at 02:00
+    start = datetime.combine(today + timedelta(days=1), time(2, 0)).replace(tzinfo=tz)
+    return start, start + timedelta(hours=4)
 
 def make_window_6am_to_6am(anchor: date, tz: ZoneInfo = TZ) -> tuple[datetime, datetime]:
     """Build a 24-hour window from 06:00 on 'anchor' to 06:00 next day."""
@@ -335,16 +368,12 @@ def build_the_schedule():
     anchor = now.date()
 
     # choose which window to build based on current time
-    if now.hour < 12:
-        print("Building 6am to 6pm window")
-        window_start, window_end = make_window_6am_to_6pm(anchor)
-    else:
-        print("Building 6pm to 6am window")
-        window_start, window_end = make_window_6pm_to_6am(anchor)
+    window_start, window_end = make_next_4h_window(now, TZ)
+    print(f"Building 4-hour window: {window_start.isoformat()} to {window_end.isoformat()}")
 
     # Pull a wider range to ensure we catch overnight shifts
-    fetch_start = (window_start - timedelta(days=1)).strftime("%m/%d/%Y")
-    fetch_end   = (window_end + timedelta(days=1)).strftime("%m/%d/%Y")
+    fetch_start = (window_start - timedelta(hours=12)).strftime("%m/%d/%Y")
+    fetch_end   = (window_end + timedelta(hours=12)).strftime("%m/%d/%Y")
 
     shifts = fetch_w2w_assigned_shifts(fetch_start, fetch_end)
 
