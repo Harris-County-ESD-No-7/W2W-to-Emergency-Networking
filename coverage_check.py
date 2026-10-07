@@ -328,18 +328,33 @@ def main() -> None:
         for (pos, cat), n in sorted(unmapped_pos.items(), key=lambda x: -x[1]):
             print(f"    POSITION_ID={pos} CATEGORY_ID={cat}  ({n} shift rows)")
 
+    unmapped_pair_shifts = sum(unmapped_pos.values())
     will_drop = len(not_assigned) + len(unmapped_resolvable) + len(unmapped_unresolvable)
     print(f"\nBOTTOM LINE: {will_drop} scheduled person(s) will NOT transfer to EN "
-          f"({len(unmapped_resolvable)} are one-line fixes).")
+          f"({len(unmapped_resolvable)} are one-line fixes)"
+          + (f", plus {unmapped_pair_shifts} shift row(s) on "
+             f"{len(unmapped_pos)} unmapped position/category pair(s)."
+             if unmapped_pos else "."))
 
-    # Forward-looking alert (for the daily timer). Only fires on real personnel
-    # drops -- unmapped position/category pairs are logged but don't page.
-    if args.alert and will_drop:
-        lines = [
-            f"{will_drop} person(s) scheduled in W2W over the next {args.days} days",
-            "will NOT transfer to the Emergency Networking crew schedule.",
-            "",
-        ]
+    # Forward-looking alert (for the daily timer). Fires on real personnel drops
+    # AND on unmapped position/category pairs. An unmapped pair silently drops
+    # whoever is scheduled under it, so it is just as much an outage -- leaving
+    # it out of this gate is how the new W2W 'Additional Shift Worked' categories
+    # ran unnoticed for nine days in Sept 2026 while this check reported zero.
+    if args.alert and (will_drop or unmapped_pos):
+        if will_drop:
+            lines = [
+                f"{will_drop} person(s) scheduled in W2W over the next {args.days} days",
+                "will NOT transfer to the Emergency Networking crew schedule.",
+                "",
+            ]
+        else:
+            lines = [
+                f"{unmapped_pair_shifts} shift row(s) scheduled in W2W over the next",
+                f"{args.days} days sit on a position/category pair with no equipment",
+                "mapping, so whoever works them will NOT reach the EN crew schedule.",
+                "",
+            ]
         for eid, emp, en_id, how in sorted(unmapped_resolvable,
                                            key=lambda x: w2w_name(x[1]).lower()):
             lines.append(f'  FIX (add row): "{eid}": "{en_id}",  # {w2w_name(emp)} (via {how})')
@@ -355,8 +370,16 @@ def main() -> None:
                 lines.append(f"  POSITION_ID={pos} CATEGORY_ID={cat} ({n} shift rows)")
         lines.append("")
         lines.append("-- coverage_check.py (daily forward check)")
-        send_alert(f"{will_drop} member(s) will not transfer (next {args.days}d)",
-                   "\n".join(lines))
+        if will_drop and unmapped_pos:
+            subject = (f"{will_drop} member(s) will not transfer + "
+                       f"{len(unmapped_pos)} unmapped pos/cat pair(s) "
+                       f"(next {args.days}d)")
+        elif will_drop:
+            subject = f"{will_drop} member(s) will not transfer (next {args.days}d)"
+        else:
+            subject = (f"{len(unmapped_pos)} unmapped position/category pair(s), "
+                       f"{unmapped_pair_shifts} shift row(s) (next {args.days}d)")
+        send_alert(subject, "\n".join(lines))
 
     if args.json:
         rep = {
